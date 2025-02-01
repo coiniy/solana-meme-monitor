@@ -78,6 +78,7 @@ export class TransactionMonitor {
     }
 
     private async checkNewTransactions() {
+        console.log('开始获取新交易...');
         const signatures = await this.connection.getSignaturesForAddress(
             new PublicKey(this.SPL_TOKEN),
             {
@@ -86,16 +87,38 @@ export class TransactionMonitor {
             }
         );
 
+        console.log(`获取到 ${signatures.length} 个新交易签名`);
         if (signatures.length === 0) return;
 
         this.lastSignature = signatures[0].signature;
 
+        let validTransactions = 0;
+        let whaleTransactions = 0;
+
         for (const { signature } of signatures.reverse()) {
             const txInfo = await this.connection.getParsedTransaction(signature);
             if (txInfo && this.isTokenTransaction(txInfo)) {
+                validTransactions++;
+
+                // 检查是否是巨鲸交易
+                const sender = this.getSender(txInfo);
+                if (sender) {
+                    const existingWallet = await AppDataSource.manager.findOne(SmartWallet, {
+                        where: {
+                            address: sender,
+                            category: WalletCategory.WHALE
+                        }
+                    });
+                    if (existingWallet) {
+                        whaleTransactions++;
+                    }
+                }
+
                 await this.analyzeTransaction(txInfo);
             }
         }
+
+        console.log(`处理完成: ${validTransactions}/${signatures.length} 个有效代币交易，其中 ${whaleTransactions} 个巨鲸交易`);
     }
 
     private async updateLastSignature() {
@@ -127,24 +150,6 @@ export class TransactionMonitor {
         } catch (error) {
             console.error('切换 RPC 节点失败:', error);
             // 不退出进程，只退出当前轮询
-        }
-    }
-
-    private async processTransaction(logs: Logs) {
-        try {
-            // 解析交易日志
-            const signature = logs.signature;
-            const txInfo = await this.connection.getParsedTransaction(signature);
-
-            if (!txInfo || !this.isTokenTransaction(txInfo)) {
-                return;
-            }
-
-            // 分析交易
-            await this.analyzeTransaction(txInfo);
-
-        } catch (error) {
-            console.error('处理交易出错:', error);
         }
     }
 
