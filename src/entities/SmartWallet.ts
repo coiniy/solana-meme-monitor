@@ -27,20 +27,20 @@ export class SmartWallet {
     })
     category!: WalletCategory;
 
-    @Column({ default: 0 })
-    transactionCount!: number;
+    @Column({ name: 'transaction_count', default: 0 })
+    transaction_count!: number;
 
-    @Column('decimal', { precision: 5, scale: 2, default: 0 })
-    winRate!: number;  // 胜率百分比
+    @Column({ name: 'win_rate', default: 0 })
+    win_rate!: number;  // 胜率百分比
 
-    @CreateDateColumn()
-    createdAt!: Date;
+    @CreateDateColumn({ name: 'created_at' })
+    created_at!: Date;
 
-    @UpdateDateColumn()
-    updatedAt!: Date;
+    @UpdateDateColumn({ name: 'updated_at' })
+    updated_at!: Date;
 
     constructor() {
-        this.createdAt = new Date();
-        this.updatedAt = new Date();
+        this.created_at = new Date();
+        this.updated_at = new Date();
     }
 } 

@@ -13,8 +13,8 @@ export const AppDataSource = new DataSource({
     password: CONFIG.DATABASE.PASSWORD,
     database: CONFIG.DATABASE.DATABASE,
     synchronize: false, // 生产环境禁用自动同步
-    logging: true,
+    logging: false,
     entities: [SmartWallet, Transaction, TokenPrice, RpcEndpoint],
-    migrations: ['dist/database/migrations/*.js'],
+    migrations: ['src/database/migrations/*.ts'],
     subscribers: [],
 }); 

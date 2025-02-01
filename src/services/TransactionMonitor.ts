@@ -18,6 +18,10 @@ export class TransactionMonitor {
     private pollingTimer?: NodeJS.Timeout;
     private readonly POLLING_INTERVAL = Number(process.env.POLLING_INTERVAL) || 30000;
     private readonly BATCH_SIZE = Number(process.env.BATCH_SIZE) || 100;
+    private readonly PROGRAMS = {
+        JUPITER_V6: 'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4',
+        RAYDIUM_V4: 'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK'
+    };
     private readonly SPL_TOKEN = process.env.MONITOR_SPL_TOKEN || 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
     private readonly rpcEndpointService: RpcEndpointService;
 
@@ -79,13 +83,26 @@ export class TransactionMonitor {
 
     private async checkNewTransactions() {
         console.log('开始获取新交易...');
-        const signatures = await this.connection.getSignaturesForAddress(
-            new PublicKey(this.SPL_TOKEN),
-            {
-                until: this.lastSignature,
-                limit: this.BATCH_SIZE
-            }
-        );
+        // 获取 Jupiter V6 和 Raydium V4 的交易
+        const [jupiterSignatures, raydiumSignatures] = await Promise.all([
+            this.connection.getSignaturesForAddress(
+                new PublicKey(this.PROGRAMS.JUPITER_V6),
+                {
+                    until: this.lastSignature,
+                    limit: this.BATCH_SIZE
+                }
+            ),
+            this.connection.getSignaturesForAddress(
+                new PublicKey(this.PROGRAMS.RAYDIUM_V4),
+                {
+                    until: this.lastSignature,
+                    limit: this.BATCH_SIZE
+                }
+            )
+        ]);
+
+        const signatures = [...jupiterSignatures, ...raydiumSignatures];
+        signatures.sort((a, b) => b.blockTime! - a.blockTime!);
 
         console.log(`获取到 ${signatures.length} 个新交易签名`);
         if (signatures.length === 0) return;
@@ -95,35 +112,54 @@ export class TransactionMonitor {
         let validTransactions = 0;
         let whaleTransactions = 0;
 
-        for (const { signature } of signatures.reverse()) {
-            const txInfo = await this.connection.getParsedTransaction(signature);
-            if (txInfo && this.isTokenTransaction(txInfo)) {
-                validTransactions++;
+        for (const { signature } of signatures) {
+            try {
+                const txInfo = await this.connection.getParsedTransaction(signature, {
+                    maxSupportedTransactionVersion: 0
+                });
 
-                // 检查是否是巨鲸交易
-                const sender = this.getSender(txInfo);
-                if (sender) {
-                    const existingWallet = await AppDataSource.manager.findOne(SmartWallet, {
-                        where: {
-                            address: sender,
-                            category: WalletCategory.WHALE
-                        }
-                    });
-                    if (existingWallet) {
-                        whaleTransactions++;
+                if (!txInfo) continue;
+
+                // 检查是否是 Jupiter 或 Raydium 交易
+                const isDexTx = txInfo.transaction.message.instructions.some(ix => {
+                    if ('programId' in ix) {
+                        const programId = ix.programId.toString();
+                        return programId === this.PROGRAMS.JUPITER_V6 ||
+                            programId === this.PROGRAMS.RAYDIUM_V4;
                     }
-                }
+                    return false;
+                });
 
-                await this.analyzeTransaction(txInfo);
+                if (isDexTx) {
+                    validTransactions++;
+                    // 检查是否是巨鲸交易
+                    const sender = this.getSender(txInfo);
+                    if (sender) {
+                        const existingWallet = await AppDataSource.manager.findOne(SmartWallet, {
+                            where: {
+                                address: sender,
+                                category: WalletCategory.WHALE
+                            }
+                        });
+                        if (existingWallet) {
+                            whaleTransactions++;
+                        }
+                    }
+
+                    await this.analyzeTransaction(txInfo);
+                }
+            } catch (error) {
+                console.error(`处理交易 ${signature} 失败:`, error);
+                continue;
             }
         }
 
-        console.log(`处理完成: ${validTransactions}/${signatures.length} 个有效代币交易，其中 ${whaleTransactions} 个巨鲸交易`);
+        console.log(`处理完成: ${validTransactions}/${signatures.length} 个有效 DEX 交易，其中 ${whaleTransactions} 个巨鲸交易`);
     }
 
     private async updateLastSignature() {
         const signatures = await this.connection.getSignaturesForAddress(
-            new PublicKey(this.SPL_TOKEN),
+            new PublicKey(this.PROGRAMS.JUPITER_V6),
             { limit: 1 }
         );
 
@@ -155,6 +191,11 @@ export class TransactionMonitor {
 
     private async analyzeTransaction(tx: ParsedTransactionWithMeta) {
         try {
+            // 首先检查是否是代币交易
+            if (!tx.meta?.postTokenBalances?.length || !tx.meta?.preTokenBalances?.length) {
+                return; // 不是代币交易
+            }
+
             const value = this.getTransactionValue(tx);
             if (value < CONFIG.MIN_TRANSACTION_SIZE) return;
 
@@ -172,11 +213,12 @@ export class TransactionMonitor {
                 }
             });
 
-            this.updateTokenStats(tokenAddress);
-
             if (existingWallet) {
-                existingWallet.transactionCount += 1;
+                existingWallet.transaction_count += 1;
                 await AppDataSource.manager.save(SmartWallet, existingWallet);
+
+                // 更新代币统计，只统计巨鲸交易
+                this.updateTokenStats(tokenAddress);
 
                 await this.dbService.saveTransaction({
                     signature: tx.transaction.signatures[0],
@@ -210,7 +252,7 @@ export class TransactionMonitor {
 
             if (existingWallet) {
                 // 更新交易次数
-                existingWallet.transactionCount += 1;
+                existingWallet.transaction_count += 1;
                 await AppDataSource.manager.save(SmartWallet, existingWallet);
                 return;
             }
@@ -219,14 +261,14 @@ export class TransactionMonitor {
             const balance = await this.connection.getBalance(new PublicKey(address));
             const balanceInSol = balance / 1e9;
 
-            // 只关注巨鲸钱包（余额大于100 SOL）
-            if (balanceInSol >= 100) {
+            // 只关注巨鲸钱包（余额大于1000 SOL）
+            if (balanceInSol >= 1000) {
                 // 创建新的智能钱包记录
                 const smartWallet = new SmartWallet();
                 smartWallet.address = address;
                 smartWallet.category = WalletCategory.WHALE;
-                smartWallet.transactionCount = 1;
-                smartWallet.winRate = 0;
+                smartWallet.transaction_count = 1;
+                smartWallet.win_rate = 0;
 
                 await AppDataSource.manager.save(SmartWallet, smartWallet);
                 console.log(`发现新的巨鲸钱包: ${address}, 余额: ${balanceInSol} SOL`);
@@ -247,75 +289,18 @@ export class TransactionMonitor {
         }
     }
 
-    private isTokenTransaction(tx: ParsedTransactionWithMeta): boolean {
-        try {
-            if (!tx.meta || !tx.meta.postTokenBalances || !tx.meta.preTokenBalances) {
-                return false;
-            }
-
-            // 检查是否是代币转账交易
-            const instructions = tx.transaction.message.instructions;
-            const hasTokenTransfer = instructions.some(ix => {
-                if ('programId' in ix) {
-                    const programId = (ix as PartiallyDecodedInstruction).programId.toString();
-                    return programId === this.SPL_TOKEN;
-                }
-                return false;
-            });
-
-            // 检查代币余额是否发生变化
-            const balanceChanged = tx.meta.postTokenBalances.length > 0 ||
-                tx.meta.preTokenBalances.length > 0;
-
-            return hasTokenTransfer && balanceChanged;
-        } catch (error) {
-            console.error('检查代币交易失败:', error);
-            return false;
-        }
-    }
-
     // 类型保护函数
     private isParsedInstruction(instruction: any): instruction is ParsedInstruction {
         return 'program' in instruction && 'parsed' in instruction;
     }
 
-    private isPartiallyDecodedInstruction(instruction: any): instruction is PartiallyDecodedInstruction {
-        return 'programId' in instruction && instruction.programId instanceof PublicKey;
-    }
-
     private getTransactionValue(tx: ParsedTransactionWithMeta): number {
         try {
-            if (!tx.meta || !tx.transaction.message.instructions) {
-                return 0;
+            // 获取代币交易金额
+            const tokenBalance = tx.meta?.postTokenBalances?.[0];
+            if (tokenBalance?.uiTokenAmount?.uiAmount) {
+                return tokenBalance.uiTokenAmount.uiAmount;
             }
-
-            // 遍历所有指令寻找 SPL Token 转账
-            for (const instruction of tx.transaction.message.instructions) {
-                if (this.isParsedInstruction(instruction) &&
-                    instruction.program === 'spl-token' &&
-                    instruction.parsed.type === 'transferChecked') {
-
-                    const { amount, decimals } = instruction.parsed.info;
-                    // 转换为实际数量（考虑代币精度）
-                    return Number(amount) / Math.pow(10, decimals);
-                }
-            }
-
-            // 检查内部指令
-            if (tx.meta.innerInstructions) {
-                for (const inner of tx.meta.innerInstructions) {
-                    for (const instruction of inner.instructions) {
-                        if (this.isParsedInstruction(instruction) &&
-                            instruction.program === 'spl-token' &&
-                            instruction.parsed.type === 'transferChecked') {
-
-                            const { amount, decimals } = instruction.parsed.info;
-                            return Number(amount) / Math.pow(10, decimals);
-                        }
-                    }
-                }
-            }
-
             return 0;
         } catch (error) {
             console.error('获取交易金额失败:', error);
@@ -325,44 +310,11 @@ export class TransactionMonitor {
 
     private getTokenAddress(tx: ParsedTransactionWithMeta): string | null {
         try {
-            if (!tx.meta || !tx.transaction.message.instructions) {
-                return null;
+            // 从代币余额变化中获取代币地址
+            const tokenBalance = tx.meta?.postTokenBalances?.[0];
+            if (tokenBalance?.mint) {
+                return tokenBalance.mint;
             }
-
-            // 遍历所有指令寻找代币地址
-            for (const instruction of tx.transaction.message.instructions) {
-                if (this.isParsedInstruction(instruction) &&
-                    instruction.program === 'spl-token') {
-
-                    // 从转账指令中获取代币地址
-                    if (instruction.parsed.type === 'transferChecked' ||
-                        instruction.parsed.type === 'transfer') {
-                        return instruction.parsed.info.mint;
-                    }
-
-                    // 从其他代币操作中获取代币地址
-                    if ('mint' in instruction.parsed.info) {
-                        return instruction.parsed.info.mint;
-                    }
-                }
-            }
-
-            // 检查内部指令
-            if (tx.meta.innerInstructions) {
-                for (const inner of tx.meta.innerInstructions) {
-                    for (const instruction of inner.instructions) {
-                        if (this.isParsedInstruction(instruction) &&
-                            instruction.program === 'spl-token') {
-
-                            if (instruction.parsed.type === 'transferChecked' ||
-                                instruction.parsed.type === 'transfer') {
-                                return instruction.parsed.info.mint;
-                            }
-                        }
-                    }
-                }
-            }
-
             return null;
         } catch (error) {
             console.error('获取代币地址失败:', error);
