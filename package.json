@@ -42,7 +42,7 @@
 		"migration:run": "typeorm-ts-node-esm migration:run -d src/database/data-source.ts",
 		"migration:revert": "npm run typeorm migration:revert -- -d src/database/data-source.ts",
 		"build": "tsc --outDir dist",
-		"start": "node --experimental-specifier-resolution=node dist/index.js",
+		"start": "NODE_ENV=production node --experimental-specifier-resolution=node dist/index.js",
 		"dev": "ts-node src/index.ts",
 		"watch": "ts-node-dev --respawn src/index.ts",
 		"test": "jest"

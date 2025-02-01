@@ -15,6 +15,8 @@ export const AppDataSource = new DataSource({
     synchronize: false, // 生产环境禁用自动同步
     logging: false,
     entities: [SmartWallet, Transaction, TokenPrice, RpcEndpoint],
-    migrations: ['src/database/migrations/*.ts'],
+    migrations: process.env.NODE_ENV === 'production'
+        ? ['dist/database/migrations/*.js']  // 生产环境使用编译后的 JS 文件
+        : ['src/database/migrations/*.ts'],  // 开发环境使用 TS 文件
     subscribers: [],
 }); 
