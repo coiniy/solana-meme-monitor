@@ -7,6 +7,12 @@ export interface RpcEndpoint {
 
 export const RPC_ENDPOINTS: RpcEndpoint[] = [
     {
+        name: 'Helius',
+        http: 'https://rpc.helius.xyz/?api-key=YOUR_API_KEY',  // 需要申请 API key
+        ws: 'wss://rpc.helius.xyz/?api-key=YOUR_API_KEY',
+        priority: 1
+    },
+    {
         name: 'GenesysGo',
         http: 'https://ssc-dao.genesysgo.net',
         ws: 'wss://ssc-dao.genesysgo.net',
@@ -16,7 +22,7 @@ export const RPC_ENDPOINTS: RpcEndpoint[] = [
         name: 'Serum',
         http: 'https://solana-api.projectserum.com',
         ws: 'wss://solana-api.projectserum.com',
-        priority: 1
+        priority: 2
     },
     {
         name: 'Ankr',
@@ -25,7 +31,7 @@ export const RPC_ENDPOINTS: RpcEndpoint[] = [
         priority: 2
     },
     {
-        name: 'Triton',
+        name: 'Triton RPC',
         http: 'https://free.rpcpool.com',
         ws: 'wss://free.rpcpool.com',
         priority: 2
@@ -71,14 +77,29 @@ export function getNextEndpoint(currentIndex: number = -1): RpcEndpoint {
 export async function checkEndpointHealth(endpoint: RpcEndpoint): Promise<boolean> {
     try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const timeoutId = setTimeout(() => controller.abort(), 3000); // 缩短超时时间到3秒
 
-        const response = await fetch(`${endpoint.http}/health`, {
+        const response = await fetch(`${endpoint.http}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getHealth"
+            }),
             signal: controller.signal
         });
 
         clearTimeout(timeoutId);
-        return response.ok;
+
+        if (!response.ok) {
+            return false;
+        }
+
+        const data = await response.json();
+        return data.result === "ok";
     } catch {
         return false;
     }

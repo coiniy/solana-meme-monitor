@@ -8,6 +8,7 @@ import { SmartWallet, WalletCategory } from '../entities/SmartWallet';
 import { AppDataSource } from '../database/data-source';
 import { getNextEndpoint, RPC_ENDPOINTS, checkEndpointHealth } from '../config/rpc-endpoints';
 import type { WebSocket } from 'ws';
+import { RpcEndpointService } from './RpcEndpointService';
 
 export class TransactionMonitor {
     private connection: Connection;
@@ -21,12 +22,19 @@ export class TransactionMonitor {
     private readonly MAX_RETRIES = 5;
     private readonly RETRY_DELAY = 5000;
     private currentRpcIndex = -1;
+    private lastSignature?: string;  // 用于记录上次查询的最后一笔交易
+    private pollingTimer?: NodeJS.Timeout;
+    private readonly POLLING_INTERVAL = Number(process.env.POLLING_INTERVAL) || 30000;
+    private readonly BATCH_SIZE = Number(process.env.BATCH_SIZE) || 100;
+    private readonly SPL_TOKEN = process.env.MONITOR_SPL_TOKEN || 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+    private readonly rpcEndpointService: RpcEndpointService;
 
-    constructor(private readonly dbService: DatabaseService) {
-        // 创建连接配置
+    constructor(
+        private readonly dbService: DatabaseService,
+        rpcEndpointService?: RpcEndpointService
+    ) {
         const config: ConnectionConfig = {
-            commitment: 'confirmed',
-            wsEndpoint: process.env.SOLANA_WS_ENDPOINT || 'wss://api.mainnet-beta.solana.com'
+            commitment: 'confirmed'
         };
 
         this.connection = new Connection(
@@ -37,130 +45,105 @@ export class TransactionMonitor {
         this.priceService = new PriceService(this.dbService);
         this.patternAnalyzer = new PatternAnalyzer(this.dbService, this.priceService);
         this.notificationService = new NotificationService();
+        this.rpcEndpointService = rpcEndpointService || new RpcEndpointService();
     }
 
     async start() {
         try {
             await this.dbService.initialize();
             await this.priceService.start();
-            await this.setupWebSocketConnection();
             console.log('开始监控 Solana 交易...');
 
-            const programs = {
-                SPL_TOKEN: process.env.MONITOR_SPL_TOKEN || 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
-                JUPITER_V6: process.env.MONITOR_JUPITER_V6 || 'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4',
-                RAYDIUM_V4: process.env.MONITOR_RAYDIUM_V4 || 'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK',
-                ORCA_WHIRLPOOL: process.env.MONITOR_ORCA_WHIRLPOOL || 'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc'
-            };
+            // 获取初始签名
+            await this.updateLastSignature();
 
-            console.log('正在监控以下程序: ');
-            Object.entries(programs).forEach(([name, address]) => {
-                console.log(`- ${name}: ${address}`);
-            });
+            // 开始轮询
+            this.startPolling();
 
-            // 订阅程序账户变更
-            this.subscriptionId = this.connection.onProgramAccountChange(
-                new PublicKey(programs.SPL_TOKEN),
-                async (accountInfo, context) => {
-                    try {
-                        await this.handleAccountChange(accountInfo, context);
-                    } catch (error) {
-                        console.error('处理账户变更失败:', error);
-                    }
-                },
-                'confirmed'
-            );
-
-            console.log('交易监控已启动，订阅ID:', this.subscriptionId);
         } catch (error) {
             console.error('启动交易监控失败:', error);
-            throw error;  // 让外层处理错误
+            throw error;
         }
     }
 
     async stop() {
-        try {
-            if (this.subscriptionId) {
-                await this.connection.removeAccountChangeListener(this.subscriptionId);
+        if (this.pollingTimer) {
+            clearInterval(this.pollingTimer);
+            this.pollingTimer = undefined;
+        }
+        await this.dbService.cleanup();
+    }
+
+    private startPolling() {
+        this.pollingTimer = setInterval(async () => {
+            try {
+                await this.checkNewTransactions();
+            } catch (error) {
+                console.error('检查新交易失败:', error);
+                this.handleError();
             }
-            await this.dbService.cleanup();
-        } catch (error) {
-            console.error('停止监控失败:', error);
-        }
+        }, this.POLLING_INTERVAL);
     }
 
-    private async setupWebSocketConnection(): Promise<void> {
-        const ws = (this.connection as any)._rpcWebSocket;
-        if (ws) {
-            ws.on('error', (error: Error) => {
-                console.error('WebSocket 连接错误:', error);
-                this.handleWebSocketError();
-            });
-
-            ws.on('close', (code: number, reason: string) => {
-                console.warn(`WebSocket 连接关闭: ${code} - ${reason}`);
-                this.handleWebSocketError();
-            });
-
-            // 使用 getLatestBlockhash 作为心跳检测
-            setInterval(async () => {
-                if (ws.readyState === 1) { // 1 表示 OPEN
-                    try {
-                        await this.connection.getLatestBlockhash();
-                    } catch (error) {
-                        console.warn('心跳检测失败:', error);
-                        this.handleWebSocketError();
-                    }
-                }
-            }, 30000);
-        }
-    }
-
-    private async handleWebSocketError() {
-        if (this.wsRetryCount < this.MAX_RETRIES) {
-            this.wsRetryCount++;
-            console.log(`尝试重新连接 (${this.wsRetryCount}/${this.MAX_RETRIES})...`);
-            setTimeout(() => this.reconnect(), this.RETRY_DELAY * this.wsRetryCount);
-        } else {
-            console.error('WebSocket 重连次数超过限制，停止重试');
-            await this.stop();
-            process.exit(1);
-        }
-    }
-
-    private async reconnect(): Promise<void> {
+    private async checkNewTransactions() {
         try {
-            await this.stop();
-            this.wsRetryCount = 0;
+            const signatures = await this.connection.getSignaturesForAddress(
+                new PublicKey(this.SPL_TOKEN),
+                {
+                    until: this.lastSignature,
+                    limit: this.BATCH_SIZE
+                }
+            );
 
-            const endpoint = getNextEndpoint(this.currentRpcIndex);
-            this.currentRpcIndex = (this.currentRpcIndex + 1) % RPC_ENDPOINTS.length;
+            if (signatures.length === 0) {
+                return;
+            }
 
-            const config: ConnectionConfig = {
-                commitment: 'confirmed',
-                wsEndpoint: endpoint.ws
-            };
+            this.lastSignature = signatures[0].signature;
 
-            this.connection = new Connection(endpoint.http, config);
+            for (const { signature } of signatures.reverse()) {
+                const txInfo = await this.connection.getParsedTransaction(signature);
+                if (txInfo) {
+                    await this.analyzeTransaction(txInfo);
+                }
+            }
 
-            console.log(`切换到 RPC 节点: ${endpoint.name} (${endpoint.http})`);
-            await this.start();
-            console.log(`成功连接到节点 ${endpoint.name}`);
         } catch (error) {
-            console.error('重新连接失败:', error);
-            this.handleWebSocketError();
+            console.error('获取交易失败:', error);
+            throw error;
         }
     }
 
-    private async handleAccountChange(accountInfo: any, context: any) {
-        // 实现账户变更处理逻辑
-        console.log('检测到账户变更:', {
-            slot: context.slot,
-            signature: context.signature,
-            accountKey: accountInfo.accountId.toBase58()
-        });
+    private async updateLastSignature() {
+        const signatures = await this.connection.getSignaturesForAddress(
+            new PublicKey(this.SPL_TOKEN),
+            { limit: 1 }
+        );
 
-        // TODO: 添加具体的处理逻辑
+        if (signatures.length > 0) {
+            this.lastSignature = signatures[0].signature;
+        }
+    }
+
+    private async handleError() {
+        try {
+            const endpoint = await this.rpcEndpointService.getBestEndpoint();
+            if (!endpoint) {
+                console.error('没有可用的 RPC 节点');
+                return;
+            }
+
+            this.connection = new Connection(endpoint.httpUrl, {
+                commitment: 'confirmed'
+            });
+
+            console.log(`切换到节点: ${endpoint.name} (${endpoint.httpUrl})`);
+            await this.updateLastSignature();
+
+        } catch (error) {
+            console.error('切换 RPC 节点失败:', error);
+            // 不退出进程，只退出当前轮询
+        }
     }
 
     private async processTransaction(logs: Logs) {
