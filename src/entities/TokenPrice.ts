@@ -5,14 +5,14 @@ export class TokenPrice {
     @PrimaryGeneratedColumn()
     id!: number;
 
-    @Column()
+    @Column({ name: 'token_address' })
     @Index()
     tokenAddress!: string;
 
     @Column('decimal', { precision: 20, scale: 8 })
     price!: number;
 
-    @CreateDateColumn()
+    @Column('timestamp')
     @Index()
     timestamp!: Date;
 

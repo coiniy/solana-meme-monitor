@@ -5,7 +5,7 @@ export class Transaction {
     @PrimaryColumn()
     signature!: string;
 
-    @Column()
+    @Column({ name: 'token_address' })
     @Index()
     tokenAddress!: string;
 
