@@ -1,7 +1,9 @@
 import { DataSource } from 'typeorm';
-import { CONFIG } from '../config';
-import { Transaction } from '../entities/Transaction';
-import { TokenPrice } from '../entities/TokenPrice';
+import { CONFIG } from '../config/index.js';
+import { SmartWallet } from '../entities/SmartWallet.js';
+import { Transaction } from '../entities/Transaction.js';
+import { TokenPrice } from '../entities/TokenPrice.js';
+import { RpcEndpoint } from '../entities/RpcEndpoint.js';
 
 export const AppDataSource = new DataSource({
     type: 'mysql',
@@ -12,7 +14,7 @@ export const AppDataSource = new DataSource({
     database: CONFIG.DATABASE.DATABASE,
     synchronize: false, // 生产环境禁用自动同步
     logging: true,
-    entities: [Transaction, TokenPrice],
-    migrations: ['src/database/migrations/*.ts'],
+    entities: [SmartWallet, Transaction, TokenPrice, RpcEndpoint],
+    migrations: ['dist/database/migrations/*.js'],
     subscribers: [],
 }); 

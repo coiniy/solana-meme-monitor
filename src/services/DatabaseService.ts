@@ -1,8 +1,16 @@
-import { AppDataSource } from '../database/data-source';
-import { SmartWallet } from '../entities/SmartWallet';
-import { Transaction } from '../entities/Transaction';
-import { TokenPrice } from '../entities/TokenPrice';
+import { AppDataSource } from '../database/data-source.js';
+import { SmartWallet } from '../entities/SmartWallet.js';
+import { Transaction } from '../entities/Transaction.js';
+import { TokenPrice } from '../entities/TokenPrice.js';
 import { MoreThanOrEqual, LessThanOrEqual } from 'typeorm';
+
+interface TransactionData {
+    signature: string;
+    tokenAddress: string;
+    tokenName?: string;  // 添加可选的代币名称
+    amount: number;
+    sender: string;
+}
 
 export class DatabaseService {
     private initialized = false;
@@ -24,15 +32,15 @@ export class DatabaseService {
         }
     }
 
-    async saveTransaction(data: {
-        signature: string;
-        tokenAddress: string;
-        amount: number;
-        sender: string;
-    }) {
+    async saveTransaction(data: TransactionData) {
         const transaction = new Transaction();
-        Object.assign(transaction, data);
-        return await AppDataSource.manager.save(Transaction, transaction);
+        transaction.signature = data.signature;
+        transaction.tokenAddress = data.tokenAddress;
+        transaction.tokenName = data.tokenName || '';  // 保存代币名称
+        transaction.amount = data.amount;
+        transaction.sender = data.sender;
+
+        await AppDataSource.manager.save(Transaction, transaction);
     }
 
     async saveTokenPrice(tokenAddress: string, price: number) {
@@ -49,10 +57,10 @@ export class DatabaseService {
         return await AppDataSource.manager.find(Transaction, {
             where: {
                 tokenAddress,
-                timestamp: MoreThanOrEqual(timestamp)
+                createdAt: MoreThanOrEqual(timestamp)
             },
             order: {
-                timestamp: 'DESC'
+                createdAt: 'DESC'
             }
         });
     }
@@ -78,7 +86,7 @@ export class DatabaseService {
             .createQueryBuilder(Transaction, 'tx')
             .select('tx.tokenAddress')
             .addSelect('SUM(tx.amount)', 'volume')
-            .where('tx.timestamp >= :timestamp', { timestamp })
+            .where('tx.createdAt >= :timestamp', { timestamp })
             .groupBy('tx.tokenAddress')
             .orderBy('volume', 'DESC')
             .limit(limit)
@@ -91,10 +99,10 @@ export class DatabaseService {
         return await AppDataSource.manager.find(Transaction, {
             where: {
                 amount: MoreThanOrEqual(minAmount),
-                timestamp: MoreThanOrEqual(timestamp)
+                createdAt: MoreThanOrEqual(timestamp)
             },
             order: {
-                timestamp: 'DESC'
+                createdAt: 'DESC'
             }
         });
     }

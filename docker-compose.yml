@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      no_cache: true  # 禁用构建缓存
+    container_name: solana-monitor
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      # 非敏感的默认配置
+      - MIN_TRANSACTION_SIZE=10
+      - MIN_TRANSACTIONS_FOR_TRENDING=50
+      - MONITORING_TIMEFRAME_MINUTES=60
+      - PRICE_UPDATE_INTERVAL=3600000
+      - PUMP_DETECTION_THRESHOLD=20
+      - PATTERN_TIME_WINDOW_MINUTES=60
+      - POLLING_INTERVAL=30000
+      - BATCH_SIZE=100

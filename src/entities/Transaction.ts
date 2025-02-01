@@ -1,25 +1,25 @@
-import { Entity, Column, PrimaryColumn, CreateDateColumn, Index } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn } from "typeorm";
 
-@Entity('transactions')
+@Entity("transactions")
 export class Transaction {
-    @PrimaryColumn()
-    signature!: string;
-
-    @Column({ name: 'token_address' })
-    @Index()
-    tokenAddress!: string;
-
-    @Column('decimal', { precision: 20, scale: 9 })
-    amount!: number;
+    @PrimaryGeneratedColumn()
+    id: number;
 
     @Column()
-    sender!: string;
+    signature: string;
 
-    @CreateDateColumn()
-    @Index()
-    timestamp!: Date;
+    @Column({ name: "token_address" })
+    tokenAddress: string;
 
-    constructor() {
-        this.timestamp = new Date();
-    }
+    @Column({ name: "token_name", type: "varchar", length: 255, nullable: true })
+    tokenName: string | null;
+
+    @Column({ type: "decimal", precision: 20, scale: 8 })
+    amount: number;
+
+    @Column()
+    sender: string;
+
+    @CreateDateColumn({ name: "created_at" })
+    createdAt: Date;
 } 

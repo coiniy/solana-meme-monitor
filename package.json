@@ -1,4 +1,5 @@
 {
+	"type": "module",
 	"dependencies": {
 		"@elizaos/plugin-solana": "0.1.8-alpha.1",
 		"@solana/web3.js": "^1.98.0",
@@ -40,9 +41,10 @@
 		"migration:create": "npm run typeorm migration:create",
 		"migration:run": "npm run typeorm migration:run -- -d src/database/data-source.ts",
 		"migration:revert": "npm run typeorm migration:revert -- -d src/database/data-source.ts",
-		"build": "tsc",
-		"start": "node dist/index.js",
+		"build": "tsc --outDir dist",
+		"start": "node --experimental-specifier-resolution=node dist/index.js",
 		"dev": "ts-node src/index.ts",
-		"watch": "ts-node-dev --respawn src/index.ts"
+		"watch": "ts-node-dev --respawn src/index.ts",
+		"test": "jest"
 	}
 }

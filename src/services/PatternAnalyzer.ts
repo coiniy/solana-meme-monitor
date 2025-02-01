@@ -1,6 +1,6 @@
 import { DatabaseService } from './DatabaseService';
 import { PriceService } from './PriceService';
-import { CONFIG } from '../config';
+import { CONFIG } from '../config/index.js';
 
 export class PatternAnalyzer {
     constructor(

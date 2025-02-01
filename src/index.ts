@@ -1,6 +1,6 @@
-import { TransactionMonitor } from './services/TransactionMonitor';
-import { DatabaseService } from './services/DatabaseService';
-import { AppDataSource } from './database/data-source';
+import { TransactionMonitor } from './services/TransactionMonitor.js';
+import { DatabaseService } from './services/DatabaseService.js';
+import { AppDataSource } from './database/data-source.js';
 
 async function main() {
     const dbService = new DatabaseService();

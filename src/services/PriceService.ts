@@ -1,7 +1,6 @@
 import axios, { AxiosError } from 'axios';
-import { CONFIG } from '../config';
-import { DatabaseService } from './DatabaseService';
-import { HttpsProxyAgent } from 'https-proxy-agent';
+import { CONFIG } from '../config/index.js';
+import { DatabaseService } from './DatabaseService.js';
 import axiosRetry from 'axios-retry';
 
 export class PriceService {
@@ -9,8 +8,7 @@ export class PriceService {
     private readonly axios;
     private readonly API_ENDPOINTS = [
         'https://api.coingecko.com/api/v3',
-        'https://pro-api.coingecko.com/api/v3',  // 如果你有 pro 账号
-        // 可以添加其他备用 API
+        'https://pro-api.coingecko.com/api/v3'  // 如果你有 pro 账号
     ];
 
     // 添加一些示例代币ID，这些是CoinGecko支持的ID
@@ -24,15 +22,9 @@ export class PriceService {
     ]);
 
     constructor(private db: DatabaseService) {
-        // 创建 HttpsProxyAgent 实例，使用 URL 字符串
-        const proxyUrl = 'http://127.0.0.1:7890';
-        const agent = new HttpsProxyAgent(proxyUrl);
-
         this.axios = axios.create({
             baseURL: process.env.PRICE_API_ENDPOINT,
-            timeout: 10000, // 设置10秒超时
-            httpsAgent: agent,
-            proxy: false  // 必须设置为 false
+            timeout: 10000  // 设置10秒超时
         });
 
         // 配置重试机制

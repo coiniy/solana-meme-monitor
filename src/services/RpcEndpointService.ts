@@ -1,6 +1,7 @@
-import { AppDataSource } from '../database/data-source';
-import { RpcEndpoint } from '../entities/RpcEndpoint';
+import { AppDataSource } from '../database/data-source.js';
+import { RpcEndpoint } from '../entities/RpcEndpoint.js';
 import { Repository } from 'typeorm';
+import { CONFIG } from '../config/index.js';
 
 export class RpcEndpointService {
     private repository: Repository<RpcEndpoint>;
