@@ -1,4 +1,4 @@
-import { Connection, PublicKey, ParsedTransactionWithMeta, Commitment, LogsCallback, TransactionSignature, Logs, TransactionError, PartiallyDecodedInstruction, ParsedInstruction } from '@solana/web3.js';
+import { Connection, PublicKey, ParsedTransactionWithMeta, Commitment, LogsCallback, TransactionSignature, Logs, TransactionError, PartiallyDecodedInstruction, ParsedInstruction, ConnectionConfig } from '@solana/web3.js';
 import { CONFIG } from '../config';
 import { DatabaseService } from './DatabaseService';
 import { PriceService } from './PriceService';
@@ -6,6 +6,8 @@ import { PatternAnalyzer } from './PatternAnalyzer';
 import { NotificationService } from './NotificationService';
 import { SmartWallet, WalletCategory } from '../entities/SmartWallet';
 import { AppDataSource } from '../database/data-source';
+import { getNextEndpoint, RPC_ENDPOINTS, checkEndpointHealth } from '../config/rpc-endpoints';
+import type { WebSocket } from 'ws';
 
 export class TransactionMonitor {
     private connection: Connection;
@@ -15,14 +17,21 @@ export class TransactionMonitor {
     private patternAnalyzer: PatternAnalyzer;
     private notificationService: NotificationService;
     private subscriptionId?: number;
+    private wsRetryCount = 0;
+    private readonly MAX_RETRIES = 5;
+    private readonly RETRY_DELAY = 5000;
+    private currentRpcIndex = -1;
 
     constructor(private readonly dbService: DatabaseService) {
+        // 创建连接配置
+        const config: ConnectionConfig = {
+            commitment: 'confirmed',
+            wsEndpoint: process.env.SOLANA_WS_ENDPOINT || 'wss://api.mainnet-beta.solana.com'
+        };
+
         this.connection = new Connection(
             process.env.SOLANA_RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com',
-            {
-                wsEndpoint: process.env.SOLANA_WS_ENDPOINT || 'wss://api.mainnet-beta.solana.com',
-                commitment: 'confirmed'
-            }
+            config
         );
 
         this.priceService = new PriceService(this.dbService);
@@ -34,7 +43,7 @@ export class TransactionMonitor {
         try {
             await this.dbService.initialize();
             await this.priceService.start();
-
+            await this.setupWebSocketConnection();
             console.log('开始监控 Solana 交易...');
 
             const programs = {
@@ -62,20 +71,6 @@ export class TransactionMonitor {
                 'confirmed'
             );
 
-            // 使用 WebSocket 的 error 事件处理连接错误
-            const ws = (this.connection as any)._rpcWebSocket;
-            if (ws) {
-                ws.on('error', (error: Error) => {
-                    console.error('WebSocket 连接错误:', error);
-                    this.reconnect();
-                });
-
-                ws.on('close', () => {
-                    console.warn('WebSocket 连接关闭');
-                    this.reconnect();
-                });
-            }
-
             console.log('交易监控已启动，订阅ID:', this.subscriptionId);
         } catch (error) {
             console.error('启动交易监控失败:', error);
@@ -94,22 +89,66 @@ export class TransactionMonitor {
         }
     }
 
-    private async reconnect() {
-        try {
-            await this.stop();  // 先清理旧的连接
-            // 创建新连接
-            this.connection = new Connection(
-                process.env.SOLANA_RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com',
-                {
-                    wsEndpoint: process.env.SOLANA_WS_ENDPOINT || 'wss://api.mainnet-beta.solana.com',
-                    commitment: 'confirmed'
+    private async setupWebSocketConnection(): Promise<void> {
+        const ws = (this.connection as any)._rpcWebSocket;
+        if (ws) {
+            ws.on('error', (error: Error) => {
+                console.error('WebSocket 连接错误:', error);
+                this.handleWebSocketError();
+            });
+
+            ws.on('close', (code: number, reason: string) => {
+                console.warn(`WebSocket 连接关闭: ${code} - ${reason}`);
+                this.handleWebSocketError();
+            });
+
+            // 使用 getLatestBlockhash 作为心跳检测
+            setInterval(async () => {
+                if (ws.readyState === 1) { // 1 表示 OPEN
+                    try {
+                        await this.connection.getLatestBlockhash();
+                    } catch (error) {
+                        console.warn('心跳检测失败:', error);
+                        this.handleWebSocketError();
+                    }
                 }
-            );
+            }, 30000);
+        }
+    }
+
+    private async handleWebSocketError() {
+        if (this.wsRetryCount < this.MAX_RETRIES) {
+            this.wsRetryCount++;
+            console.log(`尝试重新连接 (${this.wsRetryCount}/${this.MAX_RETRIES})...`);
+            setTimeout(() => this.reconnect(), this.RETRY_DELAY * this.wsRetryCount);
+        } else {
+            console.error('WebSocket 重连次数超过限制，停止重试');
+            await this.stop();
+            process.exit(1);
+        }
+    }
+
+    private async reconnect(): Promise<void> {
+        try {
+            await this.stop();
+            this.wsRetryCount = 0;
+
+            const endpoint = getNextEndpoint(this.currentRpcIndex);
+            this.currentRpcIndex = (this.currentRpcIndex + 1) % RPC_ENDPOINTS.length;
+
+            const config: ConnectionConfig = {
+                commitment: 'confirmed',
+                wsEndpoint: endpoint.ws
+            };
+
+            this.connection = new Connection(endpoint.http, config);
+
+            console.log(`切换到 RPC 节点: ${endpoint.name} (${endpoint.http})`);
             await this.start();
-            console.log('重新连接成功');
+            console.log(`成功连接到节点 ${endpoint.name}`);
         } catch (error) {
             console.error('重新连接失败:', error);
-            setTimeout(() => this.reconnect(), 5000);
+            this.handleWebSocketError();
         }
     }
 

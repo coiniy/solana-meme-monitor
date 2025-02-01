@@ -49,7 +49,9 @@ export class PriceService {
 
     async start() {
         await this.updatePrices();
-        setInterval(() => this.updatePrices(), CONFIG.PRICE_API.UPDATE_INTERVAL);
+        const interval = Number(process.env.PRICE_UPDATE_INTERVAL) || 3600000;
+        console.log(`价格更新服务已启动，更新间隔: ${interval / 1000 / 60} 分钟`);
+        setInterval(() => this.updatePrices(), interval);
     }
 
     private async updatePrices() {
