@@ -11,40 +11,117 @@ export class TransactionMonitor {
     private connection: Connection;
     private tokenTransactions: Map<string, number> = new Map();
     private smartWallets: Set<string> = new Set();
-    private db: DatabaseService;
     private priceService: PriceService;
     private patternAnalyzer: PatternAnalyzer;
     private notificationService: NotificationService;
+    private subscriptionId?: number;
 
-    constructor() {
-        this.connection = new Connection(CONFIG.RPC_ENDPOINT);
-        this.db = new DatabaseService();
-        this.priceService = new PriceService(this.db);
-        this.patternAnalyzer = new PatternAnalyzer(this.db, this.priceService);
+    constructor(private readonly dbService: DatabaseService) {
+        this.connection = new Connection(
+            process.env.SOLANA_RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com',
+            {
+                wsEndpoint: process.env.SOLANA_WS_ENDPOINT || 'wss://api.mainnet-beta.solana.com',
+                commitment: 'confirmed'
+            }
+        );
+
+        this.priceService = new PriceService(this.dbService);
+        this.patternAnalyzer = new PatternAnalyzer(this.dbService, this.priceService);
         this.notificationService = new NotificationService();
     }
 
     async start() {
-        await this.db.initialize();
-        await this.priceService.start();
+        try {
+            await this.dbService.initialize();
+            await this.priceService.start();
 
-        console.log('开始监控 Solana 交易...');
+            console.log('开始监控 Solana 交易...');
 
-        // 监控多个程序的交易
-        const programIds = Object.values(CONFIG.MONITOR_PROGRAMS).map(id => new PublicKey(id));
+            const programs = {
+                SPL_TOKEN: process.env.MONITOR_SPL_TOKEN || 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+                JUPITER_V6: process.env.MONITOR_JUPITER_V6 || 'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4',
+                RAYDIUM_V4: process.env.MONITOR_RAYDIUM_V4 || 'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK',
+                ORCA_WHIRLPOOL: process.env.MONITOR_ORCA_WHIRLPOOL || 'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc'
+            };
 
-        for (const programId of programIds) {
-            this.connection.onLogs(
-                programId,
-                (logs: Logs) => {
-                    this.processTransaction(logs);
+            console.log('正在监控以下程序: ');
+            Object.entries(programs).forEach(([name, address]) => {
+                console.log(`- ${name}: ${address}`);
+            });
+
+            // 订阅程序账户变更
+            this.subscriptionId = this.connection.onProgramAccountChange(
+                new PublicKey(programs.SPL_TOKEN),
+                async (accountInfo, context) => {
+                    try {
+                        await this.handleAccountChange(accountInfo, context);
+                    } catch (error) {
+                        console.error('处理账户变更失败:', error);
+                    }
                 },
-                'confirmed' as Commitment
+                'confirmed'
             );
-        }
 
-        console.log('正在监控以下程序:', Object.entries(CONFIG.MONITOR_PROGRAMS)
-            .map(([name, id]) => `\n- ${name}: ${id}`).join(''));
+            // 使用 WebSocket 的 error 事件处理连接错误
+            const ws = (this.connection as any)._rpcWebSocket;
+            if (ws) {
+                ws.on('error', (error: Error) => {
+                    console.error('WebSocket 连接错误:', error);
+                    this.reconnect();
+                });
+
+                ws.on('close', () => {
+                    console.warn('WebSocket 连接关闭');
+                    this.reconnect();
+                });
+            }
+
+            console.log('交易监控已启动，订阅ID:', this.subscriptionId);
+        } catch (error) {
+            console.error('启动交易监控失败:', error);
+            throw error;  // 让外层处理错误
+        }
+    }
+
+    async stop() {
+        try {
+            if (this.subscriptionId) {
+                await this.connection.removeAccountChangeListener(this.subscriptionId);
+            }
+            await this.dbService.cleanup();
+        } catch (error) {
+            console.error('停止监控失败:', error);
+        }
+    }
+
+    private async reconnect() {
+        try {
+            await this.stop();  // 先清理旧的连接
+            // 创建新连接
+            this.connection = new Connection(
+                process.env.SOLANA_RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com',
+                {
+                    wsEndpoint: process.env.SOLANA_WS_ENDPOINT || 'wss://api.mainnet-beta.solana.com',
+                    commitment: 'confirmed'
+                }
+            );
+            await this.start();
+            console.log('重新连接成功');
+        } catch (error) {
+            console.error('重新连接失败:', error);
+            setTimeout(() => this.reconnect(), 5000);
+        }
+    }
+
+    private async handleAccountChange(accountInfo: any, context: any) {
+        // 实现账户变更处理逻辑
+        console.log('检测到账户变更:', {
+            slot: context.slot,
+            signature: context.signature,
+            accountKey: accountInfo.accountId.toBase58()
+        });
+
+        // TODO: 添加具体的处理逻辑
     }
 
     private async processTransaction(logs: Logs) {
@@ -103,7 +180,7 @@ export class TransactionMonitor {
                 await AppDataSource.manager.save(SmartWallet, existingWallet);
 
                 // 保存交易数据
-                await this.db.saveTransaction({
+                await this.dbService.saveTransaction({
                     signature: tx.transaction.signatures[0],
                     tokenAddress,
                     amount: value,

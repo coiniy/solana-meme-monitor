@@ -1,13 +1,23 @@
 import { AppDataSource } from '../database/data-source';
+import { SmartWallet } from '../entities/SmartWallet';
 import { Transaction } from '../entities/Transaction';
 import { TokenPrice } from '../entities/TokenPrice';
 import { MoreThanOrEqual, LessThanOrEqual } from 'typeorm';
 
 export class DatabaseService {
+    private initialized = false;
+
     async initialize() {
+        if (this.initialized) {
+            return;
+        }
+
         try {
-            await AppDataSource.initialize();
-            console.log('数据库连接成功');
+            if (!AppDataSource.isInitialized) {
+                await AppDataSource.initialize();
+                console.log('数据库连接成功');
+            }
+            this.initialized = true;
         } catch (error) {
             console.error('数据库连接失败:', error);
             throw error;
@@ -22,16 +32,15 @@ export class DatabaseService {
     }) {
         const transaction = new Transaction();
         Object.assign(transaction, data);
-
-        await AppDataSource.manager.save(transaction);
+        return await AppDataSource.manager.save(Transaction, transaction);
     }
 
     async saveTokenPrice(tokenAddress: string, price: number) {
         const tokenPrice = new TokenPrice();
         tokenPrice.tokenAddress = tokenAddress;
         tokenPrice.price = price;
-
-        await AppDataSource.manager.save(tokenPrice);
+        tokenPrice.timestamp = new Date();
+        return await AppDataSource.manager.save(TokenPrice, tokenPrice);
     }
 
     async getRecentTransactions(tokenAddress: string, minutes: number) {
@@ -88,5 +97,12 @@ export class DatabaseService {
                 timestamp: 'DESC'
             }
         });
+    }
+
+    async cleanup() {
+        if (AppDataSource.isInitialized) {
+            await AppDataSource.destroy();
+            this.initialized = false;
+        }
     }
 } 

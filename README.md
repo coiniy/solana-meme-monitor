@@ -225,3 +225,114 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 ## 免责声明
 
 本项目仅供学习和研究使用，不构成任何投资建议。使用本项目进行的任何操作，风险自负。
+
+## Git 工作流程
+
+### 提交规范
+
+我们使用 [Conventional Commits](https://www.conventionalcommits.org/) 规范来管理提交信息：
+
+```bash
+<type>(<scope>): <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+#### 提交类型（Type）
+
+- `feat`: 新功能
+- `fix`: 修复问题
+- `docs`: 文档修改
+- `style`: 代码格式修改
+- `refactor`: 代码重构
+- `perf`: 性能优化
+- `test`: 测试相关
+- `chore`: 构建过程或辅助工具的变动
+
+#### 示例
+
+```bash
+# 添加新功能
+git commit -m "feat: 添加智能钱包监控功能"
+
+# 修复 bug
+git commit -m "fix: 修复价格更新失败问题"
+
+# 破坏性变更
+git commit -m "feat: 重构数据库结构
+
+BREAKING CHANGE: 需要执行新的数据库迁移"
+```
+
+### 分支管理
+
+- `main`: 主分支，保持稳定可部署状态
+- `develop`: 开发分支，用于集成功能
+- `feature/*`: 功能分支，用于开发新功能
+- `fix/*`: 修复分支，用于修复问题
+
+### 开发流程
+
+1. 从主分支创建功能分支
+```bash
+git checkout main
+git pull
+git checkout -b feature/new-feature
+```
+
+2. 开发并提交更改
+```bash
+git add .
+git commit -m "feat: 添加新功能"
+```
+
+3. 推送到远程仓库
+```bash
+git push origin feature/new-feature
+```
+
+4. 创建 Pull Request 到 develop 分支
+
+5. 代码审查通过后合并
+
+### 发布流程
+
+1. 将 develop 分支合并到 main
+```bash
+git checkout main
+git merge develop
+```
+
+2. 创建版本标签
+```bash
+git tag -a v1.0.0 -m "发布 1.0.0 版本"
+```
+
+3. 推送到远程仓库
+```bash
+git push origin main --tags
+```
+
+### 数据库迁移
+
+执行数据库迁移时，需要创建相应的提交信息：
+
+```bash
+git commit -m "feat(db): 添加智能钱包表
+
+- 创建 smart_wallets 表
+- 添加索引和约束
+- 更新实体类映射"
+```
+
+### 配置文件变更
+
+修改配置文件时，需要在提交信息中说明：
+
+```bash
+git commit -m "feat(config): 更新 Solana RPC 配置
+
+BREAKING CHANGE: 需要在 .env 中添加新的配置项"
+```
