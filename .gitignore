@@ -1,0 +1,44 @@
+# Dependencies
+node_modules
+.pnpm-store/
+
+# Build
+dist
+build
+
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*
+!.env.example
+
+# IDE
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+.DS_Store
+Thumbs.db
+
+# TypeScript
+*.tsbuildinfo
+
+# Coverage
+coverage
+.nyc_output
+
+# Temp
+.temp
+.tmp
+.cache 
